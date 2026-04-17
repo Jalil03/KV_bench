@@ -1,280 +1,167 @@
 # KVBench
 
-**KVBench** is a reproducible benchmark suite for studying the **latency, throughput, and memory tradeoffs** of KV-cache strategies in transformer inference.
+KVBench is a lightweight, reproducible benchmark suite for studying the latency, throughput, and memory tradeoffs of KV cache strategies in transformer inference.
 
-This project focuses on a practical systems question:
+This project focuses on a practical question: when does KV cache materially help, how much memory does it cost, and which cache mode is the best default on constrained local hardware.
 
-> **When does KV cache become worth it, and which cache strategy should be preferred under real GPU memory constraints?**
+## What This Repo Shows
 
-The current benchmark setup targets **causal language models** and studies how inference behavior changes across:
-- prompt length
-- generation length
-- cache strategy
-- GPU memory pressure
+The current benchmark set covers:
 
----
+- cache vs no-cache generation
+- prompt-length scaling
+- cache strategy comparison
+- a decode-focused microbenchmark at long context
 
-## Why this project matters
+The experiments were intentionally scoped to remain stable on an RTX 3060 Laptop GPU with 6 GB VRAM. A broader generation-length sweep was avoided after heavier runs caused system instability and shutdowns.
 
-KV cache is one of the key mechanisms that makes autoregressive generation practical in modern transformers.
+## Main Findings
 
-During token-by-token decoding, recomputing attention states for the full previous context becomes increasingly expensive. KV cache avoids that repeated work by storing previously computed key/value tensors and reusing them during generation.
+- KV cache becomes much more valuable at long context than at short context.
+- `dynamic` cache is the strongest default on the current setup.
+- `offloaded` cache is a useful fallback when memory pressure matters.
+- `no_cache` breaks down for decode-heavy long-context inference.
+- `static` cache could not be evaluated locally because of Triton/backend support issues.
 
-That creates an important tradeoff:
+From the saved prompt-length results:
 
-- **less recomputation**
-- **faster decoding**
-- **higher memory usage**
+- at `512` prompt tokens, `use_cache=False` averaged about `8.81 s`
+- at `512` prompt tokens, `use_cache=True` averaged about `3.63 s`
 
-KVBench is designed to study that tradeoff in a controlled and reproducible way.
+That makes the long-context advantage of caching large enough to be visible even on a small local benchmark.
 
----
-
-## Project goals
-
-This project aims to answer questions such as:
-
-- How much does KV cache improve decoding speed?
-- How does GPU memory usage grow with context length?
-- How do prompt length and generation length change the benefit of caching?
-- When is `dynamic` cache preferable to `offloaded` cache?
-- What happens when backend support prevents some cache strategies from running?
-
----
-
-## Current scope
-
-The project currently benchmarks:
-
-- **No cache** (`use_cache=False`)
-- **Dynamic cache**
-- **Offloaded cache**
-- **Static cache attempt** with failure logging when unsupported on the current setup
-
-It also includes:
-- single-run baseline benchmarking
-- prompt-length sweeps
-- multi-run prompt-length sweeps with warmup and aggregation
-- cache-strategy sweeps
-- raw and aggregated JSON outputs
-
----
-
-## Hardware setup
-
-Current experiments were developed and tested on:
-
-- **GPU:** NVIDIA GeForce RTX 3060 Laptop GPU
-- **VRAM:** 6 GB
-- **Platform:** Windows
-- **Framework:** PyTorch + Hugging Face Transformers
-
-This hardware constraint is part of the project motivation: the benchmark is meant to reflect realistic limited-VRAM experimentation, not only ideal large-server conditions.
-
----
-
-## Repository structure
+## Repo Layout
 
 ```text
-kvbench/
-├── README.md
-├── PROJECT_CHECKLIST.md
-├── requirements.txt
-├── .gitignore
-├── check_gpu.py
-├── test_model.py
-├── configs/
-├── docs/
-│   └── progress_log.md
-├── experiments/
-├── notebooks/
-├── results/
-│   ├── raw/
-│   └── figures/
-└── src/
-    ├── run_benchmark.py
-    ├── run_prompt_sweep.py
-    ├── run_prompt_sweep_multirun.py
-    ├── run_cache_strategy_sweep.py
-    └── run_generation_length_sweep.py
+KV_cache/
+|-- README.md
+|-- requirements.txt
+|-- check_gpu.py
+|-- test_model.py
+|-- src/
+|   |-- run_benchmark.py
+|   |-- run_prompt_sweep.py
+|   |-- run_prompt_sweep_multirun.py
+|   |-- run_cache_strategy_sweep.py
+|   |-- run_decode_microbenchmark.py
+|   `-- plot_results.py
+|-- results/
+|   |-- raw/
+|   `-- figures/
+`-- notebooks/
 ```
 
----
+## Environment
 
-## Implemented benchmark stages
+- GPU: NVIDIA RTX 3060 Laptop GPU
+- VRAM: 6 GB
+- Model: `HuggingFaceTB/SmolLM2-360M`
+- Frameworks: PyTorch + Hugging Face Transformers
 
-### 1. Environment validation
-- CUDA/GPU detection
-- PyTorch validation
-- tokenizer/model loading
-- first successful generation test
-
-### 2. Baseline benchmark
-- compare `use_cache=False` vs `use_cache=True`
-- measure latency
-- measure generated tokens
-- measure tokens/sec
-- measure peak GPU memory
-
-### 3. Prompt-length sweep
-- vary prompt length
-- compare no-cache vs cached runs
-- analyze how cache benefit evolves with context length
-
-### 4. Multi-run prompt-length sweep
-- warmup runs
-- repeated trials
-- mean/std aggregation
-- raw and aggregated result files
-
-### 5. Cache-strategy sweep
-- compare `no_cache`, `dynamic`, and `offloaded`
-- attempt `static` cache and log backend/toolchain failures
-- analyze latency/memory tradeoffs between working strategies
-
-### 6. Next stage
-- generation-length sweep
-- prefill vs decode decomposition
-- break-even analysis
-- decision guide for cache selection
-
----
-
-## Key findings so far
-
-Early results already show useful patterns:
-
-- KV cache generally improves decoding speed compared with no-cache.
-- The benefit becomes much clearer at longer contexts.
-- `dynamic` cache is a strong default strategy on the current setup.
-- `offloaded` cache becomes competitive for longer contexts and lower-VRAM conditions.
-- `static` cache is not currently usable on this machine due to backend/toolchain support issues.
-
-These observations are exactly the kind of real-world constraints this project is meant to capture.
-
----
-
-## How to set up the environment
-
-### 1. Create a virtual environment
-
-#### Windows PowerShell
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-```
-
-#### Linux / macOS
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-```
-
-### 2. Install dependencies
+Install dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. Validate the environment
+Check GPU visibility:
 
 ```bash
 python check_gpu.py
+```
+
+Run a simple model sanity check:
+
+```bash
 python test_model.py
 ```
 
----
+## How To Reproduce
 
-## Example commands
+Baseline benchmark:
 
-### Baseline benchmark
 ```bash
 python src/run_benchmark.py
 ```
 
-### Prompt-length sweep
-```bash
-python src/run_prompt_sweep.py
-```
+Prompt-length multirun benchmark:
 
-### Multi-run prompt-length sweep
 ```bash
 python src/run_prompt_sweep_multirun.py
 ```
 
-### Cache-strategy sweep
+Cache strategy comparison:
+
 ```bash
 python src/run_cache_strategy_sweep.py
 ```
 
-### Generation-length sweep
+Decode-focused microbenchmark:
+
 ```bash
-python src/run_generation_length_sweep.py
+python src/run_decode_microbenchmark.py
 ```
 
----
+Regenerate plots:
 
-## Output files
-
-Benchmark scripts save structured outputs inside:
-
-```text
-results/raw/
+```bash
+python src/plot_results.py
 ```
 
-Typical outputs include:
-- raw per-trial JSON logs
-- aggregated JSON summaries
-- later: figures and analysis artifacts
+## Outputs
 
----
+Raw and aggregated experiment results are written to `results/raw/`.
 
-## Project direction
+Generated figures are written to `results/figures/`.
 
-The goal is not to build “just another benchmark script.”
+The plotting script now uses trial standard deviations as error bars to make variance visible instead of showing mean curves alone.
 
-The goal is to build a **small, serious inference study** that explains:
+For detailed plot interpretation, see [Figure guide](C:/Users/JL/OneDrive/Desktop/KV_cache/notebooks/Figure%20guide.md).
 
-- when KV-cache strategies win
-- why they win
-- how memory constraints affect the decision
-- which strategy should be chosen under practical deployment limitations
+## Benchmark Scope
 
----
+### 1. Prompt-length scaling
 
-## Planned next steps
+Tests how latency, throughput, and peak GPU memory change as prompt length grows for:
 
-- add generation-length sweep analysis
-- separate prefill and decode effects
-- add break-even analysis
-- add plotting and visualization
-- write a concise report of findings
-- turn benchmark results into a practical cache-selection guide
+- `use_cache=False`
+- `use_cache=True`
 
----
+### 2. Cache strategy comparison
 
-## Limitations
+Tests:
 
-Current limitations include:
-- small-model focus due to 6 GB VRAM constraints
-- single-machine Windows environment
-- some backend-specific features unavailable locally
-- early-stage result coverage
+- `no_cache`
+- `dynamic`
+- `offloaded`
+- `static` when backend support allows it
 
-These limitations are intentional to some extent: part of the project is to study inference tradeoffs under constrained hardware, not only under large production GPUs.
+### 3. Decode-focused microbenchmark
 
----
+Uses a fixed long prompt (`512` tokens) and a conservative decode length (`64` new tokens) to isolate the decode-side value of KV cache without risking unstable long runs on 6 GB hardware.
 
-## Long-term vision
+## Current Limitations
 
-KVBench is being developed as more than a toy benchmark.
+- Results come from a single laptop GPU environment.
+- The tested model is intentionally small for safety and reproducibility.
+- `static` cache failed locally because Triton/backend support was unavailable.
+- The decode split uses a practical timing estimate rather than kernel-level instrumentation.
+- A broad generation-length sweep was intentionally not run on this machine because previous heavier tests caused full system shutdowns.
 
-The long-term goal is to turn it into a practical and well-documented study of KV-cache strategy selection for transformer inference under real latency and memory constraints.
+## Why The Scope Is Conservative
 
----
+The smaller decode benchmark is deliberate. On this hardware, pushing generation length higher is not just a slower run; it can make the machine unstable. The project therefore prioritizes:
 
-## Author
+- safe repeatability
+- clear comparisons
+- honest reporting of hardware constraints
 
-Built by **Abd El Jalil BZN** as an LLM systems / inference optimization project focused on KV-cache behavior in transformer decoding.
+This makes the benchmark more useful for real local-development scenarios, where safety and reproducibility matter as much as raw scale.
+
+## Next Improvements
+
+- add a compact summary table directly in the README
+- refactor duplicated runner logic into shared utilities
+- test one additional small model for cross-model comparison
+- add batch-size sensitivity experiments if hardware allows
+- compare local results on a higher-VRAM machine in a future extension
